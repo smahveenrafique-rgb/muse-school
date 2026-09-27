@@ -20,6 +20,7 @@ def _settings(**over) -> Settings:
         "exam_api_base_url": "stub://exam-engine",
         "results_api_base_url": "stub://results-engine",
         "ai_use_stub": True,
+        "egress_allow_internal": True,
     }
     base.update(over)
     return Settings(**base)
@@ -80,6 +81,8 @@ def test_ready_reports_stub_engines(client):
 
 
 def test_engine_health_unreachable_never_raises(settings):
+    import asyncio
+
     from app.services.engine_client import ExamEngineClient
     s = Settings(app_env="development",
                  app_secret_key=settings.app_secret_key,
@@ -87,14 +90,16 @@ def test_engine_health_unreachable_never_raises(settings):
                  database_path=str(settings.database_path),
                  exam_api_base_url="http://127.0.0.1:1",  # closed port
                  results_api_base_url="stub://results-engine",
-                 ai_use_stub=True)
-    h = ExamEngineClient(s).health(request_id="t")
+                 ai_use_stub=True,
+                 egress_allow_internal=True)
+    h = asyncio.run(ExamEngineClient(s).health(request_id="t"))
     assert h["status"] == "unreachable"
     assert h["engine"] == "exam-engine"
 
 
 def test_engine_health_ok_path_reports_ok(settings):
     """The reachable-engine path must report ok/degraded, never raise."""
+    import asyncio
     import json
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -124,8 +129,9 @@ def test_engine_health_ok_path_reports_ok(settings):
                      database_path=str(settings.database_path),
                      exam_api_base_url=f"http://127.0.0.1:{port}",
                      results_api_base_url="stub://results-engine",
-                     ai_use_stub=True)
-        h = ExamEngineClient(s).health(request_id="t")
+                     ai_use_stub=True,
+                     egress_allow_internal=True)
+        h = asyncio.run(ExamEngineClient(s).health(request_id="t"))
     finally:
         server.shutdown()
     assert h["status"] == "ok"
@@ -222,18 +228,20 @@ def test_contexts_listing_per_task(client):
 
 
 def test_gateway_run_with_results_context(settings):
+    import asyncio
     gw = AIGateway(settings)
-    res = gw.run(task="summarize_results", context="RESULTS",
-                 user_input="Rows: APS-1: obtained=20, total=25, grade=A, result=PASS",
-                 request_id="ctx1")
+    res = asyncio.run(gw.run(task="summarize_results", context="RESULTS",
+                             user_input="Rows: APS-1: obtained=20, total=25, grade=A, result=PASS",
+                             request_id="ctx1"))
     assert res.ok
 
 
 def test_gateway_run_invalid_context_never_calls_provider(settings):
+    import asyncio
     gw = AIGateway(settings)
     with pytest.raises(ValueError):
-        gw.run(task="draft_exam_outline", context="GENERAL",
-               user_input="x", request_id="ctx2")
+        asyncio.run(gw.run(task="draft_exam_outline", context="GENERAL",
+                           user_input="x", request_id="ctx2"))
 
 
 # ── request size gate ───────────────────────────────────────────────────

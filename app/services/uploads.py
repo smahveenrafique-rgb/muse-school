@@ -98,7 +98,11 @@ def parse_student_workbook(upload: ValidatedUpload) -> list[dict]:
             raise UploadError("xlsx support requires openpyxl") from exc
         wb = load_workbook(io.BytesIO(upload.content), read_only=True, data_only=True)
         ws = wb.active
-        header_cells = next(ws.iter_rows(values_only=True))
+        try:
+            header_row = next(ws.iter_rows(values_only=True))
+        except StopIteration as exc:
+            raise UploadError("empty workbook: missing header row") from exc
+        header_cells = header_row
         headers = [str(h).strip().lower() if h is not None else "" for h in header_cells]
         raw_rows = [dict(zip(headers, row, strict=False))
                     for row in ws.iter_rows(min_row=2, values_only=True)]

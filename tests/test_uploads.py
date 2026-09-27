@@ -92,6 +92,25 @@ def test_parse_skips_blank_rows_and_requires_header(settings):
     assert len(rows) == 1 and rows[0]["full_name"] == "Sara Khan"
 
 
+@pytest.mark.anyio
+async def test_rejects_empty_workbook(settings):
+    empty = Workbook()
+    buf = io.BytesIO()
+    empty.save(buf)
+    content = buf.getvalue()
+    up = await validate_upload(
+        make_upload_file(
+            "empty.xlsx",
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+        settings,
+        allowed={"xlsx"},
+    )
+    with pytest.raises(UploadError, match="header|no student rows"):
+        parse_student_workbook(up)
+
+
 def test_upload_endpoint_roundtrip(client, auth_headers):
     content = xlsx_bytes([["Bilal Ahmed", "Ahmed", "4", "", "03001112222"]])
     r = client.post("/api/v1/uploads/students", headers=auth_headers,

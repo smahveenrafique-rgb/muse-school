@@ -11,15 +11,21 @@ Nothing is silently accepted: a malformed or schema-invalid response from
 one provider fails over to the next; if every provider fails, the caller
 gets a structured error — never invented data.
 
+Concurrency: the chain is walked with `await`; per-tier backoff uses
+`asyncio.sleep` with jitter — no event-loop blocking. Providers are
+expected to implement `a_complete` (native async); sync-only providers
+(test doubles) fall back to a thread-pool via the base class.
+
 Logging (per attempt): provider, model, request_id, task, success/failure,
 latency, failover event, validation result. Never: keys, full payloads.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import random
 import re
-import time
 from dataclasses import dataclass, field
 
 from app.ai.prompts import allowed_tasks, build_system_prompt
@@ -34,6 +40,10 @@ log = get_logger("ai-gateway")
 
 _FAILOVER_KINDS = {"timeout", "rate_limited", "quota_exceeded",
                    "transport_error", "bad_response", "validation_error"}
+
+# Bounded backoff between retries of the same provider tier.
+_RETRY_BASE_SECONDS = 0.2
+_RETRY_JITTER_SECONDS = 0.1
 
 
 @dataclass
@@ -81,9 +91,11 @@ def _extract_json(text: str) -> dict:
 
 class AIGateway:
     def __init__(self, settings: Settings,
-                 provider_overrides: list[AIProvider] | None = None):
+                 provider_overrides: list[AIProvider] | None = None,
+                 http_pool=None):
         self.settings = settings
         self._overrides = provider_overrides
+        self._http_pool = http_pool
 
     def _build_chain(self, task: str = "") -> list[AIProvider]:
         if self._overrides is not None:
@@ -96,6 +108,7 @@ class AIGateway:
                 provider_label=tier.provider,
                 model=tier.model, base_url=tier.base_url,
                 api_key=tier.api_key, timeout=self.settings.ai_timeout_seconds,
+                pool=self._http_pool,
             ))
         return chain
 
@@ -139,14 +152,14 @@ class AIGateway:
                              attempts=state.attempts,
                              failovers=state.failovers)
 
-    def _try_provider(self, provider: AIProvider, messages: list[ChatMessage],
-                      task: str, request_id: str,
-                      state: _RunState) -> GatewayResult | None:
+    async def _try_provider(self, provider: AIProvider, messages: list[ChatMessage],
+                            task: str, request_id: str,
+                            state: _RunState) -> GatewayResult | None:
         """Run one provider through its retries. Returns a terminal result
         (success or missing-input refusal), or None to fail over."""
         for retry in range(1 + self.settings.ai_max_retries):
             state.attempts += 1
-            result = provider.complete(messages, request_id=request_id)
+            result = await provider.a_complete(messages, request_id=request_id)
             validation = "n/a"
             if result.ok:
                 terminal = self._validate_ok_result(task, result, request_id,
@@ -170,11 +183,14 @@ class AIGateway:
                       retry=retry)
             if result.error_kind not in _FAILOVER_KINDS:
                 break  # non-retryable for this provider; still fail over
-            time.sleep(0.2 * (retry + 1))
+            # Bounded backoff + jitter — no retry storms.
+            delay = _RETRY_BASE_SECONDS * (2 ** retry) \
+                + random.uniform(0, _RETRY_JITTER_SECONDS)
+            await asyncio.sleep(delay)
         return None
 
-    def run(self, *, task: str, context: str,
-            user_input: str, request_id: str) -> GatewayResult:
+    async def run(self, *, task: str, context: str,
+                  user_input: str, request_id: str) -> GatewayResult:
         if task not in allowed_tasks():
             raise ValueError(f"unknown AI task: {task}")
         system_prompt = build_system_prompt(task, context)
@@ -193,8 +209,8 @@ class AIGateway:
                           from_provider=chain[i - 1].describe()["provider"],
                           to_provider=provider.describe()["provider"],
                           reason=counter.last_error)
-            terminal = self._try_provider(provider, messages, task,
-                                          request_id, counter)
+            terminal = await self._try_provider(provider, messages, task,
+                                                request_id, counter)
             if terminal is not None:
                 return terminal
         log_event(log, 40, "ai chain exhausted",
@@ -206,3 +222,28 @@ class AIGateway:
                              attempts=counter.attempts,
                              failovers=counter.failovers,
                              error=f"All AI providers failed: {counter.last_error}")
+
+    async def aclose(self) -> None:
+        """Release private provider pools (shared pool is app-level)."""
+        for provider in self._build_chain():
+            closer = getattr(provider, "aclose", None)
+            if closer is not None:
+                await closer()
+
+    def sync_run(self, *, task: str, context: str,
+                 user_input: str, request_id: str) -> GatewayResult:
+        """Synchronous facade for tests, scripts, and sync-only callers.
+
+        Runs the async pipeline in a private event loop. Inside a
+        running loop (e.g. an async test) call `await gateway.run(...)`
+        instead — `sync_run` is not re-entrant.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(
+                self.run(task=task, context=context,
+                         user_input=user_input, request_id=request_id))
+        raise RuntimeError(
+            "sync_run called from inside a running event loop — "
+            "use `await gateway.run(...)` instead")

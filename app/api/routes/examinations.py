@@ -11,17 +11,42 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import Settings, get_settings
 from app.db import db_session
-from app.logging_setup import get_request_id
+from app.logging_setup import get_logger, get_request_id, log_event
 from app.schemas.engines import ExamJobOut, ExamJobRequest, ExamType
 from app.security import require_admin
 from app.services.engine_client import EngineError, ExamEngineClient
 from app.services.history import list_exam_jobs, record_exam_job
+from app.services.http_pool import resolve_http_pool
 
 router = APIRouter(prefix="/api/v1/examinations", tags=["examinations"])
 
+log = get_logger("api")
+
 
 def _client(settings: Settings = Depends(get_settings)) -> ExamEngineClient:
-    return ExamEngineClient(settings)
+    """Engine client bound to the app-level shared HTTP pool."""
+    client = ExamEngineClient(settings)
+    client.set_pool(resolve_http_pool(settings))
+    return client
+
+
+def _raise_engine_error(exc: EngineError) -> None:
+    """Convert a controlled engine failure into a 502 with a safe message.
+
+    Upstream response bodies are logged (with correlation id) but never
+    forwarded to the client — no engine stack-trace leakage.
+    """
+    log_event(log, 40, "engine request failed", engine=exc.engine,
+              error=exc.error, request_id=get_request_id(),
+              detail=exc.detail[:200])
+    raise HTTPException(
+        status_code=502,
+        detail={
+            "error": exc.error,
+            "message": f"{exc.engine} is currently unavailable.",
+            "request_id": get_request_id(),
+        },
+    ) from exc
 
 
 @router.get("/types", response_model=list[str])
@@ -30,9 +55,9 @@ def exam_types():
 
 
 @router.post("/jobs", response_model=ExamJobOut, dependencies=[Depends(require_admin)])
-def submit_exam_job(payload: ExamJobRequest,
-                    settings: Settings = Depends(get_settings),
-                    client: ExamEngineClient = Depends(_client)):
+async def submit_exam_job(payload: ExamJobRequest,
+                          settings: Settings = Depends(get_settings),
+                          client: ExamEngineClient = Depends(_client)):
     """Ask the Exam Engine to start an exam-generation job.
 
     The submission is recorded in platform history (orchestration metadata
@@ -40,11 +65,10 @@ def submit_exam_job(payload: ExamJobRequest,
     """
     request_id = get_request_id()
     try:
-        data = client.submit_job(payload.model_dump(), request_id)
+        data = await client.submit_job(payload.model_dump(), request_id)
         out = ExamJobOut(**data)
     except EngineError as exc:
-        raise HTTPException(status_code=exc.status_code,
-                            detail=f"Exam Engine error: {exc}") from exc
+        _raise_engine_error(exc)
     with db_session(settings) as conn:
         record_exam_job(conn, request_id=request_id, actor="admin",
                         job_id=out.job_id, exam_type=out.exam_type,
@@ -65,14 +89,13 @@ def exam_job_history(settings: Settings = Depends(get_settings),
 
 @router.get("/jobs/{job_id}", response_model=ExamJobOut,
             dependencies=[Depends(require_admin)])
-def get_exam_job(job_id: str, client: ExamEngineClient = Depends(_client)):
+async def get_exam_job(job_id: str, client: ExamEngineClient = Depends(_client)):
     request_id = get_request_id()
     try:
-        data = client.get_job(job_id, request_id)
+        data = await client.get_job(job_id, request_id)
         return ExamJobOut(**data)
     except EngineError as exc:
-        raise HTTPException(status_code=exc.status_code,
-                            detail=f"Exam Engine error: {exc}") from exc
+        _raise_engine_error(exc)
 
 
 def exam_type_hint(exam_type: ExamType) -> str:

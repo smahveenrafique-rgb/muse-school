@@ -13,10 +13,13 @@ from pydantic import BaseModel, Field
 from app.ai.gateway import AIGateway, AIServiceError, GatewayResult
 from app.ai.prompts import allowed_contexts, allowed_tasks
 from app.config import Settings, get_settings
-from app.logging_setup import get_request_id
+from app.logging_setup import get_logger, get_request_id, log_event
 from app.security import require_admin
+from app.services.http_pool import resolve_http_pool
 
 router = APIRouter(prefix="/api/v1/ai", tags=["ai"])
+
+log = get_logger("api")
 
 AIContext = Literal["CAT-1", "CAT-2", "FINAL", "RESULTS", "GENERAL"]
 
@@ -48,17 +51,31 @@ def list_contexts(task: str = ""):
 
 
 @router.post("/run", response_model=AITaskOut, dependencies=[Depends(require_admin)])
-def run_ai_task(payload: AITaskRequest, settings: Settings = Depends(get_settings)):
+async def run_ai_task(payload: AITaskRequest, settings: Settings = Depends(get_settings)):
     request_id = get_request_id()
-    gateway = AIGateway(settings)
+    pool = resolve_http_pool(settings)
+    gateway = AIGateway(settings, http_pool=pool)
     try:
-        result: GatewayResult = gateway.run(task=payload.task,
-                                            context=payload.context,
-                                            user_input=payload.input,
-                                            request_id=request_id)
+        result: GatewayResult = await gateway.run(task=payload.task,
+                                                  context=payload.context,
+                                                  user_input=payload.input,
+                                                  request_id=request_id)
     except (ValueError, AIServiceError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        # Release private provider pools when the app-level pool was not
+        # attached (standalone callers). The app owns the shared pool.
+        if getattr(settings, "_http_pool", None) is None:
+            await gateway.aclose()
     if not result.ok:
-        raise HTTPException(status_code=502, detail=result.error)
+        log_event(log, 50, "ai task failed", request_id=request_id,
+                  task=payload.task, detail=result.error[:200])
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "provider_unavailable",
+                "message": "All AI providers are currently unavailable.",
+                "request_id": request_id,
+            })
     return AITaskOut(ok=True, task=result.task, data=result.data,
                      provider=result.provider, model=result.model)

@@ -12,6 +12,7 @@ from app.config import Settings, get_settings
 from app.schemas.student import (
     StudentCreate,
     StudentImportResult,
+    StudentImportRow,
     StudentListOut,
     StudentOut,
     StudentUpdate,
@@ -35,7 +36,8 @@ def list_students(
     page_size: int = Query(default=25, ge=1, le=100),
     svc: StudentService = Depends(_svc),
 ):
-    return svc.list(q=q, class_name=class_name, status=status_, page=page, page_size=page_size)
+    return svc.list_students(q=q, class_name=class_name, status=status_,
+                             page=page, page_size=page_size)
 
 
 @router.post("", response_model=StudentOut, status_code=status.HTTP_201_CREATED,
@@ -78,6 +80,5 @@ def delete_student():
              dependencies=[Depends(require_admin)])
 def import_student_rows(rows: list = Body(...), svc: StudentService = Depends(_svc)):
     """Bulk import from already-validated rows (used by the upload flow)."""
-    from app.schemas.student import StudentImportRow
     parsed = [StudentImportRow(**r) for r in rows]
     return svc.import_rows(parsed)

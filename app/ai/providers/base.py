@@ -2,10 +2,16 @@
 
 Every provider speaks through this interface. Adding a new provider means
 implementing one class — the gateway, prompts, and validation never change.
+
+Concurrency: providers are async. `acreate` is the default async
+implementation; sync-only tests may subclass and override `complete` —
+the gateway detects which one is implemented and calls the sync path via
+`asyncio.to_thread` so sync providers remain usable from tests.
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
 
@@ -29,7 +35,7 @@ class ChatMessage:
 
 
 class AIProvider:
-    """Base class — subclass and implement `complete`."""
+    """Base class — subclass and implement `acreate` (or `complete`)."""
 
     name: str = "base"
 
@@ -39,7 +45,15 @@ class AIProvider:
         self.api_key = api_key
         self.timeout = timeout
 
+    async def a_complete(self, messages: list[ChatMessage], *,
+                         request_id: str) -> ProviderResult:
+        """Async completion. Default implementation runs the sync `complete`
+        in a worker thread so sync-only test providers keep working."""
+        return await asyncio.to_thread(self.complete, messages, request_id=request_id)
+
     def complete(self, messages: list[ChatMessage], *, request_id: str) -> ProviderResult:
+        """Sync fallback (thread-pool). Real providers should override
+        `a_complete` with a native async implementation instead."""
         raise NotImplementedError
 
     def describe(self) -> dict:

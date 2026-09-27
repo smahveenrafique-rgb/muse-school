@@ -13,6 +13,7 @@
     <h1>School AI Platform</h1>
     {% if error %}<div class="banner error">{{ error }}</div>{% endif %}
     <form method="post" action="/login">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token | default('') }}">
       <div class="field">
         <label for="token">Admin token</label>
         <input type="password" id="token" name="token" autocomplete="current-password" required autofocus>

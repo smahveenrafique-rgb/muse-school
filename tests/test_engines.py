@@ -62,4 +62,9 @@ def test_engine_unreachable_is_502(client, auth_headers, settings):
         "exam_type": "CAT-1", "class_name": "5", "subject": "Math",
     })
     assert r.status_code == 502
-    assert "Exam Engine" in r.json()["detail"]
+    body = r.json()["detail"]
+    # Controlled error shape: category + safe message + request id. No
+    # engine stack trace or internal URL in the client response.
+    assert body["error"] == "service_unavailable"
+    assert "exam-engine" in body["message"]
+    assert "request_id" in body

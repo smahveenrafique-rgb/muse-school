@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.ai.gateway import AIGateway, AIServiceError
@@ -14,10 +16,15 @@ def make_gateway(*scripts, settings):
     return AIGateway(settings, provider_overrides=providers)
 
 
+def _run(gw, **kwargs):
+    """Run the async gateway synchronously (dedicated event loop)."""
+    return asyncio.run(gw.run(**kwargs))
+
+
 def test_primary_success_no_failover(settings):
     gw = make_gateway({"task": "draft_exam_outline"}, settings=settings)
-    res = gw.run(task="draft_exam_outline", context="CAT-1",
-                 user_input="Outline for class 5 mathematics.", request_id="t1")
+    res = _run(gw, task="draft_exam_outline", context="CAT-1",
+               user_input="Outline for class 5 mathematics.", request_id="t1")
     assert res.ok and res.failovers == 0
     assert res.data["title"] == "Stub outline"
     assert res.provider == "stub"
@@ -26,8 +33,8 @@ def test_primary_success_no_failover(settings):
 def test_primary_timeout_fails_over_to_secondary(settings):
     gw = make_gateway({"force": "timeout", "task": "draft_exam_outline"},
                       {"task": "summarize_results"}, settings=settings)
-    res = gw.run(task="summarize_results", context="CAT-2",
-                 user_input="rows…", request_id="t2")
+    res = _run(gw, task="summarize_results", context="CAT-2",
+               user_input="rows…", request_id="t2")
     assert res.ok and res.failovers == 1
     assert "summary" in res.data
 
@@ -35,8 +42,8 @@ def test_primary_timeout_fails_over_to_secondary(settings):
 def test_tertiary_catches_after_two_failures(settings):
     gw = make_gateway({"force": "timeout"}, {"force": "rate_limited"},
                       {"task": "parent_message"}, settings=settings)
-    res = gw.run(task="parent_message", context="FINAL",
-                 user_input="Result: 80%.", request_id="t3")
+    res = _run(gw, task="parent_message", context="FINAL",
+               user_input="Result: 80%.", request_id="t3")
     assert res.ok and res.failovers == 2
     assert "message" in res.data
 
@@ -44,8 +51,8 @@ def test_tertiary_catches_after_two_failures(settings):
 def test_all_providers_fail_is_controlled_error(settings):
     gw = make_gateway({"force": "timeout"}, {"force": "rate_limited"},
                       settings=settings)
-    res = gw.run(task="draft_exam_outline", context="CAT-1",
-                 user_input="x", request_id="t4")
+    res = _run(gw, task="draft_exam_outline", context="CAT-1",
+               user_input="x", request_id="t4")
     assert not res.ok
     assert res.failovers == 1  # two providers → one failover event
     assert "All AI providers failed" in res.error
@@ -54,8 +61,8 @@ def test_all_providers_fail_is_controlled_error(settings):
 def test_malformed_output_fails_over(settings):
     gw = make_gateway({"force": "malformed"}, {"task": "draft_exam_outline"},
                       settings=settings)
-    res = gw.run(task="draft_exam_outline", context="CAT-1",
-                 user_input="x", request_id="t5")
+    res = _run(gw, task="draft_exam_outline", context="CAT-1",
+               user_input="x", request_id="t5")
     assert res.ok and res.failovers == 1  # never silently accepted
 
 
@@ -66,8 +73,8 @@ def test_schema_violation_fails_over(settings):
             return ProviderResult(ok=True, provider="stub", model="stub",
                                   latency_ms=1.0, text='{"title": 123}')
     gw = AIGateway(settings, provider_overrides=[BadJson(), StubProvider()])
-    res = gw.run(task="draft_exam_outline", context="CAT-1",
-                 user_input="x", request_id="t6")
+    res = _run(gw, task="draft_exam_outline", context="CAT-1",
+               user_input="x", request_id="t6")
     assert res.ok and res.failovers == 1
 
 
@@ -79,8 +86,8 @@ def test_missing_input_refusal_is_controlled(settings):
                                   latency_ms=1.0,
                                   text='{"error": "missing_input", "needed": ["subject"]}')
     gw = AIGateway(settings, provider_overrides=[Refuser(), StubProvider()])
-    res = gw.run(task="draft_exam_outline", context="CAT-1",
-                 user_input="x", request_id="t7")
+    res = _run(gw, task="draft_exam_outline", context="CAT-1",
+               user_input="x", request_id="t7")
     # A missing-input refusal surfaces immediately as a controlled error —
     # it must NOT fail over to a provider that might invent the data.
     assert not res.ok and res.failovers == 0
@@ -90,14 +97,14 @@ def test_missing_input_refusal_is_controlled(settings):
 def test_no_providers_configured_raises(settings):
     gw = AIGateway(settings, provider_overrides=[])
     with pytest.raises(AIServiceError):
-        gw.run(task="draft_exam_outline", context="CAT-1",
-               user_input="x", request_id="t8")
+        _run(gw, task="draft_exam_outline", context="CAT-1",
+             user_input="x", request_id="t8")
 
 
 def test_unknown_task_rejected(settings):
     gw = make_gateway({}, settings=settings)
     with pytest.raises(ValueError):
-        gw.run(task="write_essay", context="CAT-1", user_input="x", request_id="t9")
+        _run(gw, task="write_essay", context="CAT-1", user_input="x", request_id="t9")
 
 
 # ── prompt routing ──────────────────────────────────────────────────────

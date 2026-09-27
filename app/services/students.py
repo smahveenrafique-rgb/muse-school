@@ -2,6 +2,10 @@
 
 Identity rule: `student_code` is generated server-side as APS-<year>-<seq>
 and never changes. Engines reference students by this code.
+
+Concurrency: codes come from the `student_seq` table via a single atomic
+UPSERT ... RETURNING statement — concurrent creates are serialized by
+SQLite's write lock and can never allocate the same sequence value.
 """
 
 from __future__ import annotations
@@ -20,24 +24,26 @@ from app.schemas.student import (
     StudentUpdate,
 )
 
-# Alias: StudentService.list shadows the `list` builtin for annotations
-# inside the class body, so later methods use this alias instead.
-_BuiltinList = list
-
 
 def _row_to_out(row: sqlite3.Row) -> StudentOut:
     return StudentOut(**dict(row))
 
 
 def _next_code(conn: sqlite3.Connection, year: int) -> str:
-    prefix = f"APS-{year}-"
+    """Atomically allocate the next per-year sequence value.
+
+    Single statement: insert the year row if absent, or increment and
+    return it. SQLite serializes the write transaction, so two
+    concurrent allocators always get distinct values.
+    """
     row = conn.execute(
-        "SELECT student_code FROM students WHERE student_code LIKE ? "
-        "ORDER BY student_code DESC LIMIT 1",
-        (prefix + "%",),
+        """INSERT INTO student_seq (year, next_val) VALUES (?, 1)
+           ON CONFLICT(year) DO UPDATE SET next_val = next_val + 1
+           RETURNING next_val""",
+        (year,),
     ).fetchone()
-    seq = int(row["student_code"].rsplit("-", 1)[1]) + 1 if row else 1
-    return f"{prefix}{seq:04d}"
+    seq = row["next_val"]
+    return f"APS-{year}-{seq:04d}"
 
 
 def _audit(conn: sqlite3.Connection, action: str, entity_id: str, detail: str = "") -> None:
@@ -77,8 +83,8 @@ class StudentService:
             row = conn.execute("SELECT * FROM students WHERE student_code = ?", (code,)).fetchone()
             return _row_to_out(row) if row else None
 
-    def list(self, *, q: str = "", class_name: str = "", status: str = "",
-             page: int = 1, page_size: int = 25) -> StudentListOut:
+    def list_students(self, *, q: str = "", class_name: str = "", status: str = "",
+                      page: int = 1, page_size: int = 25) -> StudentListOut:
         page = max(1, page)
         page_size = min(max(1, page_size), 100)
         clauses, params = [], []
@@ -122,8 +128,8 @@ class StudentService:
             _audit(conn, "update", row["student_code"], ",".join(patch))
             return _row_to_out(row)
 
-    def set_status(self, student_id: int, status: str) -> StudentOut | None:
-        return self.update(student_id, StudentUpdate(status=status))  # type: ignore[arg-type]
+    def set_status(self, student_id: int, new_status: str) -> StudentOut | None:
+        return self.update(student_id, StudentUpdate(status=new_status))  # type: ignore[arg-type]
 
     def delete(self, student_id: int) -> bool:
         """Hard delete is intentionally unavailable via service — use status.
@@ -132,9 +138,9 @@ class StudentService:
         """
         return False
 
-    def import_rows(self, rows: _BuiltinList[StudentImportRow]) -> StudentImportResult:
+    def import_rows(self, rows: list[StudentImportRow]) -> StudentImportResult:
         created = skipped = duplicates = 0
-        errors: _BuiltinList[str] = []
+        errors: list[str] = []
         with db_session(self.settings) as conn:
             year = datetime.now(UTC).year
             for i, r in enumerate(rows, start=1):
@@ -186,7 +192,7 @@ class StudentService:
                 "active": row["active"] or 0,
                 "inactive": row["inactive"] or 0}
 
-    def distinct_classes(self) -> _BuiltinList[str]:
+    def distinct_classes(self) -> list[str]:
         with db_session(self.settings) as conn:
             rows = conn.execute(
                 "SELECT DISTINCT class_name FROM students ORDER BY class_name").fetchall()
