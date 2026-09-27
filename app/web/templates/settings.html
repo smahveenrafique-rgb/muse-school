@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid cols-2">
+  <div class="card">
+    <h2>Connectivity status</h2>
+    <div id="connectivity"><p class="muted">Loading…</p></div>
+  </div>
+  <div class="card">
+    <h2>Configuration <span class="muted">(secrets hidden)</span></h2>
+    <dl class="kv" id="config-list">
+      {% for k, v in config.items() %}
+      <dt>{{ k }}</dt><dd>{{ v }}</dd>
+      {% endfor %}
+    </dl>
+    <p class="muted" style="margin-top:1rem">Secrets live in the server's <code>.env</code> file and are never shown here or sent to the browser.</p>
+  </div>
+</div>
+<div class="grid cols-2" style="margin-top:1.25rem">
+  <div class="card">
+    <h2>AI Gateway</h2>
+    <div id="ai-status"><p class="muted">Loading…</p></div>
+  </div>
+  <div class="card">
+    <h2>Test the gateway</h2>
+    <div class="field">
+      <label for="t-task">Task</label>
+      <select id="t-task"></select>
+    </div>
+    <div class="field">
+      <label for="t-context">Context (routes the system prompt)</label>
+      <select id="t-context"></select>
+    </div>
+    <div class="field">
+      <label for="t-input">Input</label>
+      <textarea id="t-input" rows="3">Draft an outline for class 5, subject Mathematics. Recent topics only.</textarea>
+    </div>
+    <button class="btn btn-gold" id="btn-test">✦ Run AI task</button>
+    <div id="test-out" style="margin-top:1rem"></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+(async () => {
+  const tasks = await App.api("/api/v1/ai/tasks").catch(() => []);
+  const taskSel = document.getElementById("t-task");
+  const ctxSel = document.getElementById("t-context");
+  taskSel.innerHTML = tasks.map(t => `<option>${App.esc(t)}</option>`).join("");
+  async function loadContexts() {
+    const ctxs = await App.api(`/api/v1/ai/contexts?task=${encodeURIComponent(taskSel.value)}`).catch(() => []);
+    ctxSel.innerHTML = ctxs.map(c => `<option>${App.esc(c)}</option>`).join("");
+  }
+  taskSel.onchange = loadContexts;
+  await loadContexts();
+
+  const ready = await App.api("/api/v1/ready").catch(() => null);
+  const kv = (k, v) => `<dt>${App.esc(k)}</dt><dd>${v}</dd>`;
+  document.getElementById("connectivity").innerHTML = ready
+    ? `<dl class="kv">` +
+      kv("Environment", App.esc(ready.environment || "development")) +
+      kv("Exam Engine", `${App.enginePill(ready.engines.exam.status)} <span class="muted">${App.esc(ready.engines.exam.detail || "")}</span>`) +
+      kv("Results Engine", `${App.enginePill(ready.engines.results.status)} <span class="muted">${App.esc(ready.engines.results.detail || "")}</span>`) +
+      kv("Database", App.esc(ready.database)) +
+      kv("Stub mode", ready.stub_mode ? App.pill("ON — development doubles", "stub") : App.pill("off", "ok")) +
+      `</dl>`
+    : `<div class="banner error">Could not reach the API.</div>`;
+  document.getElementById("ai-status").innerHTML = ready
+    ? `<dl class="kv"><dt>Providers configured</dt><dd>${ready.ai.providers_configured}</dd>
+       <dt>Providers</dt><dd>${ready.ai.providers.map(p => App.esc(p)).join(", ") || "<span class='muted'>none</span>"}</dd>
+       <dt>Stub mode</dt><dd>${ready.ai.stub_mode ? App.pill("yes (offline)", "stub") : App.pill("no — live", "ok")}</dd></dl>`
+    : `<div class="banner error">Could not reach the API.</div>`;
+
+  document.getElementById("btn-test").onclick = async (e) => {
+    const btn = e.currentTarget, box = document.getElementById("test-out");
+    App.setBusy(btn, true, "Running…");
+    try {
+      const res = await App.api("/api/v1/ai/run", { method: "POST", body: {
+        task: taskSel.value,
+        context: ctxSel.value,
+        input: document.getElementById("t-input").value,
+      }});
+      box.innerHTML = `<p>${App.pill("succeeded", "ok")} via ${App.esc(res.provider)} / ${App.esc(res.model)}</p><pre class="code">${App.esc(JSON.stringify(res.data, null, 2))}</pre>`;
+    } catch (err) { box.innerHTML = `<div class="banner error">${App.esc(err.message)}</div>`; }
+    App.setBusy(btn, false);
+  };
+})();
+</script>
+{% endblock %}

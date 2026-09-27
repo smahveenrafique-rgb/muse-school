@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="toolbar">
+  <button class="btn btn-primary" id="btn-add">+ Add student</button>
+  <label class="btn btn-ghost" style="cursor:pointer">Import Excel <input type="file" id="file-import" accept=".xlsx,.xls,.csv" hidden></label>
+  <span class="spacer"></span>
+  <span class="muted" id="count"></span>
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  <div class="searchbar">
+    <input type="text" id="q" placeholder="Search name, code, father…">
+    <select id="f-class"><option value="">All classes</option></select>
+    <select id="f-status">
+      <option value="">Any status</option>
+      <option value="active">Active</option>
+      <option value="inactive">Inactive</option>
+    </select>
+    <button class="btn btn-ghost" id="btn-search">Search</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Code</th><th>Name</th><th>Father</th><th>Class</th><th>Section</th><th>Mobile</th><th>Status</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="toolbar" style="margin-top:.8rem;margin-bottom:0">
+    <button class="btn btn-ghost btn-sm" id="prev">← Prev</button>
+    <span class="muted" id="page-info"></span>
+    <button class="btn btn-ghost btn-sm" id="next">Next →</button>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/students.js"></script>
+{% endblock %}

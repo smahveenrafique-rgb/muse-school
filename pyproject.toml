@@ -1,0 +1,25 @@
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C", "SIM", "TRY", "BLE", "RUF"]
+ignore = [
+    "B008",   # FastAPI Depends()/Body()/File() in parameter defaults is the framework idiom
+    "TRY003", # long raise messages are this codebase's established style
+    "TRY004", # ValueError is correct for invalid task/context *values*
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+[tool.ruff.lint.per-file-ignores]
+"app/ai/prompts.py" = ["E501"]  # prompt copy is content, not code — long lines intentional
+

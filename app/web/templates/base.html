@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} · School AI Platform</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/design.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="sub">Arsalan Public School</div>
+      <div class="name">School AI Platform</div>
+    </div>
+    <nav class="nav" aria-label="Primary">
+      <a href="/" class="{{ 'active' if nav == 'dashboard' else '' }}"><span class="icon">▦</span> Dashboard</a>
+      <a href="/students" class="{{ 'active' if nav == 'students' else '' }}"><span class="icon">◉</span> Students</a>
+      <a href="/examinations" class="{{ 'active' if nav == 'examinations' else '' }}"><span class="icon">✎</span> Examinations</a>
+      <a href="/results" class="{{ 'active' if nav == 'results' else '' }}"><span class="icon">▤</span> Results</a>
+      <a href="/settings" class="{{ 'active' if nav == 'settings' else '' }}"><span class="icon">⚙</span> Settings</a>
+    </nav>
+    <div class="foot">
+      <form method="post" action="/logout" style="display:inline">
+        <button type="submit">Sign out</button>
+      </form>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <div style="display:flex;align-items:center;gap:.75rem">
+        <button class="menu-toggle" id="menu-toggle" aria-label="Menu">☰</button>
+        <h1>{{ title }}</h1>
+      </div>
+      <span class="muted" id="request-id" title="Correlation ID"></span>
+    </div>
+    <div class="content">
+      <div class="banner warn" id="stub-banner" role="alert"></div>
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+</div>
+<div id="toasts" aria-live="polite"></div>
+<script src="/static/js/app.js"></script>
+<script>
+  document.getElementById("menu-toggle")?.addEventListener("click", () =>
+    document.getElementById("sidebar").classList.toggle("open"));
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,96 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Offline-safe test envelope: explicit stubs, no provider keys.
+      APP_ENV: development
+      APP_SECRET_KEY: ci-secret-key-32-chars-minimum-ok
+      ADMIN_API_TOKEN: ci-admin-token-32-chars-minimum
+      DATABASE_PATH: /tmp/sap-ci.db
+      EXAM_API_BASE_URL: stub://exam-engine
+      RESULTS_API_BASE_URL: stub://results-engine
+      AI_USE_STUB: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy pip-audit
+
+      - name: Compile check
+        run: python -m compileall -q app tests
+
+      - name: Ruff lint
+        run: ruff check app tests
+
+      - name: Mypy
+        run: mypy --explicit-package-bases app
+
+      - name: Run test suite
+        run: python -m pytest tests/ -q
+
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt
+
+      - name: Secret hygiene
+        run: |
+          # .env must never be committed; no secrets in tracked files
+          test ! -f .env
+          ! grep -rEn "sk-[a-zA-Z0-9]{8,}|ghp_[a-zA-Z0-9]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY" \
+            --include="*.py" --include="*.js" --include="*.html" \
+            --include="*.md" --include="*.txt" --include="*.toml" \
+            app static tests docs || (echo "possible secret in tracked files" && exit 1)
+          ! grep -r "change-me" --include="*.py" app/ || (echo "placeholder secret in code" && exit 1)
+
+      - name: Production startup validation
+        run: |
+          # 1) Production must REFUSE explicit stubs.
+          if APP_ENV=production \
+             APP_SECRET_KEY=ci-secret-key-32-chars-minimum-ok \
+             ADMIN_API_TOKEN=ci-admin-token-32-chars-minimum \
+             DATABASE_PATH=/tmp/sap-prod-guard.db \
+             EXAM_API_BASE_URL=stub://exam-engine \
+             RESULTS_API_BASE_URL=stub://results-engine \
+             AI_USE_STUB=true \
+             python -c "from app.config import get_settings; get_settings()"; then
+            echo "production booted with stubs — guard broken" && exit 1
+          else
+            echo "production stub guard: refused as required"
+          fi
+          # 2) Production boots with non-stub URLs (engines unreachable is OK).
+          APP_ENV=production \
+          APP_SECRET_KEY=ci-secret-key-32-chars-minimum-ok \
+          ADMIN_API_TOKEN=ci-admin-token-32-chars-minimum \
+          DATABASE_PATH=/tmp/sap-prod-boot.db \
+          EXAM_API_BASE_URL=http://127.0.0.1:9/exam \
+          RESULTS_API_BASE_URL=http://127.0.0.1:9/results \
+          AI_USE_STUB=false \
+          python - <<'EOF'
+          import threading, time, urllib.request, json
+          from app.main import create_app
+          import uvicorn
+          srv = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1",
+                                             port=18099, log_level="error"))
+          t = threading.Thread(target=srv.run, daemon=True)
+          t.start()
+          time.sleep(3)
+          d = json.loads(urllib.request.urlopen(
+              "http://127.0.0.1:18099/api/v1/ready", timeout=15).read())
+          assert d["environment"] == "production", d
+          assert d["stub_mode"] is False, d
+          print("production boot: OK (engines unreachable, controlled)")
+          srv.should_exit = True
+          EOF

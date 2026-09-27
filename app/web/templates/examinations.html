@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="tabs" role="tablist" id="exam-tabs">
+  <button class="tab active" data-exam="CAT-1" role="tab">CAT-1</button>
+  <button class="tab" data-exam="CAT-2" role="tab">CAT-2</button>
+  <button class="tab" data-exam="FINAL" role="tab">Final / Annual</button>
+  <button class="tab" data-exam="HISTORY" role="tab">Examination history</button>
+</div>
+
+<div id="pane-job">
+  <div class="grid cols-2">
+    <div class="card">
+      <h2>New <span id="job-exam-label">CAT-1</span> job</h2>
+      <p class="muted">The request goes to the Exam Engine. This platform does not
+      decide paper patterns, marks, or any examination rules.</p>
+      <div class="form-row">
+        <div class="field"><label for="class-name">Class</label><input type="text" id="class-name" placeholder="e.g. 5"></div>
+        <div class="field"><label for="subject">Subject</label><input type="text" id="subject" placeholder="e.g. Mathematics"></div>
+      </div>
+      <div class="toolbar">
+        <button class="btn btn-primary" id="btn-submit">Submit to Exam Engine</button>
+        <button class="btn btn-ghost" id="btn-ai-outline">✦ Draft outline with AI</button>
+      </div>
+      <div id="job-result"></div>
+    </div>
+
+    <div class="card">
+      <h2>Check job status</h2>
+      <div class="searchbar">
+        <input type="text" id="job-id" placeholder="job id" style="flex:1">
+        <button class="btn btn-ghost" id="btn-status">Check</button>
+      </div>
+      <div id="job-status"></div>
+      <h2 style="margin-top:1.5rem">AI outline</h2>
+      <div id="ai-output"><p class="muted">Use “Draft outline with AI” to get a topic outline for the teacher's review. Marks and patterns are decided by the Exam Engine, not the AI.</p></div>
+    </div>
+  </div>
+</div>
+
+<div id="pane-history" hidden>
+  <div class="card">
+    <h2>Examination history</h2>
+    <p class="muted">Jobs this platform submitted to the Exam Engine. Live job state is read from the engine; this list is the platform's submission record.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Submitted</th><th>Job ID</th><th>Type</th><th>Class</th><th>Subject</th><th>Status</th><th></th></tr></thead>
+        <tbody id="history-rows"><tr><td colspan="7"><p class="muted">Loading…</p></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/examinations.js"></script>
+{% endblock %}
